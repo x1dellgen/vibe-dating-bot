@@ -1,16 +1,25 @@
 import asyncio
 import logging
-import aiosqlite
+import os
+from dotenv import load_dotenv
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.state import State, StatesGroup 
 from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, 
                            InlineKeyboardButton, InputMediaPhoto, ReplyKeyboardRemove)
 
 import database as db
 
-API_TOKEN = '8844164962:AAGCaj-peoEt8PEjdGf1XN6EcSIBusUQnn0'  # Не забудь вставить свой токен от @BotFather!
+# Загружаем переменные из файла .env
+load_dotenv()
+
+API_TOKEN = os.getenv("BOT_TOKEN") 
+
+if not API_TOKEN:
+    exit("Ошибка: Токен бота не найден в файле .env!")
+
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -39,7 +48,6 @@ def get_main_menu():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Смотреть анкеты 🔎")], [KeyboardButton(text="Мой профиль 👤")]], resize_keyboard=True)
 
 def get_edit_menu():
-    # Кнопки расположены по одной в ряд, чтобы они были большими и текст влезал полностью
     kb = [
         [InlineKeyboardButton(text="📝 Изменить имя", callback_data="edit_name")],
         [InlineKeyboardButton(text="🔢 Изменить возраст", callback_data="edit_age")],
@@ -178,10 +186,18 @@ async def reg_final(call: types.CallbackQuery, state: FSMContext):
     scope = call.data.split('_')[1]
     d = await state.get_data()
     
-    async with aiosqlite.connect(db.DB_NAME) as connection:
-        await connection.execute('''INSERT OR REPLACE INTO users (telegram_id, username, name, age, city, gender, preference, description, search_scope, registration_complete)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)''', (call.from_user.id, call.from_user.username, d['name'], d['age'], d['city'], d['gender'], d['preference'], d['description'], scope))
-        await connection.commit()
+    # Архитектурное исправление: убран прямой SQL-запрос
+    await db.register_user(
+        user_id=call.from_user.id,
+        username=call.from_user.username,
+        name=d['name'],
+        age=d['age'],
+        city=d['city'],
+        gender=d['gender'],
+        preference=d['preference'],
+        description=d['description'],
+        search_scope=scope
+    )
         
     await db.update_user_photos(call.from_user.id, d['photo_list'])
     await state.clear()
@@ -324,9 +340,8 @@ async def process_edit_value(message: types.Message, state: FSMContext):
         if not all(c.isalpha() or c in "- " for c in value):
             return await message.answer("В названии города только буквы! Попробуй снова:")
 
-    async with aiosqlite.connect(db.DB_NAME) as connection:
-        await connection.execute(f"UPDATE users SET {field} = ? WHERE telegram_id = ?", (value, message.from_user.id))
-        await connection.commit()
+    # Архитектурное исправление: убрано дублирование и прямой SQL-запрос
+    await db.update_user_field(message.from_user.id, field, value)
 
     await state.clear()
     await message.answer("Данные успешно изменены! ✨", reply_markup=get_main_menu())
@@ -336,9 +351,9 @@ async def process_edit_value(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("up_"))
 async def process_edit_preference(call: types.CallbackQuery, state: FSMContext):
     pref = call.data.split('_')[1]
-    async with aiosqlite.connect(db.DB_NAME) as connection:
-        await connection.execute("UPDATE users SET preference = ? WHERE telegram_id = ?", (pref, call.from_user.id))
-        await connection.commit()
+    
+    # Архитектурное исправление: переиспользуем атомарный метод обновления
+    await db.update_user_field(call.from_user.id, "preference", pref)
         
     await call.message.answer(f"Предпочтения обновлены на: {pref} 👌", reply_markup=get_main_menu())
     user = await db.get_user_profile(call.from_user.id)
@@ -347,9 +362,9 @@ async def process_edit_preference(call: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("us_"))
 async def process_edit_scope(call: types.CallbackQuery, state: FSMContext):
     scope = call.data.split('_')[1]
-    async with aiosqlite.connect(db.DB_NAME) as connection:
-        await connection.execute("UPDATE users SET search_scope = ? WHERE telegram_id = ?", (scope, call.from_user.id))
-        await connection.commit()
+    
+    # Архитектурное исправление: переиспользуем атомарный метод обновления
+    await db.update_user_field(call.from_user.id, "search_scope", scope)
         
     text_scope = "В моем городе 📍" if scope == "city" else "По всей стране 🌍"
     await call.message.answer(f"Радиус поиска обновлен на: {text_scope}", reply_markup=get_main_menu())
