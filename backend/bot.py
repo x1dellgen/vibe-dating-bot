@@ -8,9 +8,10 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup 
 from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, 
-                           InlineKeyboardButton, InputMediaPhoto, ReplyKeyboardRemove)
+                           InlineKeyboardButton, InputMediaPhoto, ReplyKeyboardRemove,
+                           WebAppInfo) # 🎯 Шаг 1: Успешно импортировали WebAppInfo
 
-import database as db
+from backend.app import database as db
 
 # Загружаем переменные из файла .env
 load_dotenv()
@@ -19,6 +20,10 @@ API_TOKEN = os.getenv("BOT_TOKEN")
 
 if not API_TOKEN:
     exit("Ошибка: Токен бота не найден в файле .env!")
+
+# 🎯 Шаг 2: Ссылка на твое Mini App из вкладки Ports в VS Code.
+# ОБЯЗАТЕЛЬНО замени эту заглушку на свою реальную https-ссылку из VS Code!
+MINI_APP_URL = "https://0ffm52n9-5173.euw.devtunnels.ms/"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
@@ -90,25 +95,39 @@ async def show_next_candidate(message_or_call, user_id):
             InlineKeyboardButton(text="👎 Пропустить", callback_data=f"btn_dislike_{candidate['info']['telegram_id']}")
         ],
         [
-            InlineKeyboardButton(text="📩 Написать суперлайк", callback_data=f"btn_super_{candidate['info']['telegram_id']}")
+            InlineKeyboardButton(text="📩 Написать суперлайк", callback_data=f"btn_super_{candidate['info']['candidate']['telegram_id']}")
         ]
     ])
     await show_profile_card(user_id, candidate, kb=kb, prefix="✨ Найдена анкета:\n")
 
 # --- РЕГИСТРАЦИЯ ---
 
+# 🎯 Шаг 3: Обновили команду /start под запуск Mini App
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear() # Мягко сбрасываем любые старые FSM-состояния, чтобы не было конфликтов
     await db.init_db()
+    
     if not message.from_user.username:
         return await message.answer("⚠️ Установи username в настройках Telegram и напиши /start снова!")
     
-    user = await db.get_user_profile(message.from_user.id)
-    if user and user['info']['registration_complete']:
-        await message.answer("С возвращением!", reply_markup=get_main_menu())
-    else:
-        await message.answer(f"Привет! Это VibeDating-бот 👋", 
-                             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Создать анкету ✨", callback_data="start_reg")]]))
+    # Создаем кнопку-ссылку, которая откроет наше WebApp прямо внутри интерфейса Telegram
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔥 Открыть VibeDating", 
+                web_app=WebAppInfo(url=MINI_APP_URL)
+            )
+        ]
+    ])
+    
+    await message.answer(
+        f"Привет, {message.from_user.first_name}! 👋\n\n"
+        "Добро пожаловать в **VibeDating** — дейтинг-сервис нового поколения внутри Telegram.\n"
+        "Нажми на кнопку ниже, чтобы открыть приложение, настроить свой профиль и начать поиск! ✨",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
 
 @dp.callback_query(F.data == "start_reg")
 async def start_reg(call: types.CallbackQuery, state: FSMContext):
@@ -186,7 +205,6 @@ async def reg_final(call: types.CallbackQuery, state: FSMContext):
     scope = call.data.split('_')[1]
     d = await state.get_data()
     
-    # Архитектурное исправление: убран прямой SQL-запрос
     await db.register_user(
         user_id=call.from_user.id,
         username=call.from_user.username,
@@ -340,7 +358,6 @@ async def process_edit_value(message: types.Message, state: FSMContext):
         if not all(c.isalpha() or c in "- " for c in value):
             return await message.answer("В названии города только буквы! Попробуй снова:")
 
-    # Архитектурное исправление: убрано дублирование и прямой SQL-запрос
     await db.update_user_field(message.from_user.id, field, value)
 
     await state.clear()
@@ -352,7 +369,6 @@ async def process_edit_value(message: types.Message, state: FSMContext):
 async def process_edit_preference(call: types.CallbackQuery, state: FSMContext):
     pref = call.data.split('_')[1]
     
-    # Архитектурное исправление: переиспользуем атомарный метод обновления
     await db.update_user_field(call.from_user.id, "preference", pref)
         
     await call.message.answer(f"Предпочтения обновлены на: {pref} 👌", reply_markup=get_main_menu())
@@ -363,7 +379,6 @@ async def process_edit_preference(call: types.CallbackQuery, state: FSMContext):
 async def process_edit_scope(call: types.CallbackQuery, state: FSMContext):
     scope = call.data.split('_')[1]
     
-    # Архитектурное исправление: переиспользуем атомарный метод обновления
     await db.update_user_field(call.from_user.id, "search_scope", scope)
         
     text_scope = "В моем городе 📍" if scope == "city" else "По всей стране 🌍"
